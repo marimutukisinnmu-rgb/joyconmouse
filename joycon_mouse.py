@@ -11,7 +11,9 @@ DEFAULT_SPEED = 600.0
 MIN_SPEED = 100
 MAX_SPEED = 2000
 POLL_MS = 8
-WHEEL_INTERVAL = 0.12
+DEFAULT_WHEEL_SPEED = 12.0
+MIN_WHEEL_SPEED = 1
+MAX_WHEEL_SPEED = 40
 DEBUG_INPUT = False
 BUTTONS = {'A': 0, 'B': 1, 'X': 2, 'Y': 3, 'R': 6, 'ZR': 7, 'L': 6, 'ZL': 7}
 pyautogui.FAILSAFE = True
@@ -53,13 +55,6 @@ def click_edges(current: set[str], previous: set[str]) -> None:
     for key in current - previous:
         pyautogui.click(button=key)
 
-def scroll_edges(current: set[str], previous: set[str]) -> None:
-    # One wheel notch per button press; holding does not generate repeated scrolls.
-    if 'up' in current - previous:
-        pyautogui.scroll(1)
-    if 'down' in current - previous:
-        pyautogui.scroll(-1)
-
 def raw_state(joy) -> tuple:
     axes = tuple(round(float(joy.get_axis(i)), 2) for i in range(joy.get_numaxes()))
     buttons = tuple(i for i in range(joy.get_numbuttons()) if joy.get_button(i))
@@ -70,11 +65,15 @@ class JoyConMouseApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title('Joy-Con Mouse')
-        self.root.geometry('460x250')
-        self.root.minsize(420, 230)
+        self.root.geometry('460x330')
+        self.root.minsize(420, 310)
         self.speed = tk.DoubleVar(value=DEFAULT_SPEED)
         self.status = tk.StringVar(value='Joy-Conを検索中…')
         self.speed_text = tk.StringVar(value=f'{int(DEFAULT_SPEED)} px/s')
+        self.wheel_speed = tk.DoubleVar(value=DEFAULT_WHEEL_SPEED)
+        self.wheel_speed_text = tk.StringVar(value=f'{int(DEFAULT_WHEEL_SPEED)} 段/秒')
+        self.wheel_accumulator = 0.0
+        self.last_tick_time = time.monotonic()
         self.previous_clicks: set[str] = set()
         self.previous_scrolls: set[str] = set()
         self.last_raw: dict[int, tuple] = {}
@@ -95,7 +94,15 @@ class JoyConMouseApp:
         self.scale.pack(side='left', fill='x', expand=True, padx=(0, 12))
         ttk.Label(row, textvariable=self.speed_text, width=10, anchor='e').pack(side='right')
         ttk.Label(frame, text='遅い  ←────────→  速い').pack(anchor='w')
-        ttk.Separator(frame).pack(fill='x', pady=10)
+        ttk.Label(frame, text='ホイール速度', font=('', 12, 'bold')).pack(anchor='w', pady=(10, 0))
+        wheel_row = ttk.Frame(frame)
+        wheel_row.pack(fill='x', pady=(6, 2))
+        self.wheel_scale = ttk.Scale(wheel_row, from_=MIN_WHEEL_SPEED, to=MAX_WHEEL_SPEED,
+                                     variable=self.wheel_speed, command=self.on_wheel_speed_change)
+        self.wheel_scale.pack(side='left', fill='x', expand=True, padx=(0, 12))
+        ttk.Label(wheel_row, textvariable=self.wheel_speed_text, width=10, anchor='e').pack(side='right')
+        ttk.Label(frame, text='ゆっくり  ←────────→  速い').pack(anchor='w')
+        ttk.Separator(frame).pack(fill='x', pady=8)
         ttk.Label(frame, textvariable=self.status, wraplength=410).pack(anchor='w')
         ttk.Label(frame, text='ホイール: LR=右スティック上下 / Rのみ=X・B / Lのみ=十字キー↑↓',
                   wraplength=410).pack(anchor='w', pady=(8, 0))
@@ -105,6 +112,9 @@ class JoyConMouseApp:
     def on_speed_change(self, _value=None):
         self.speed_text.set(f'{int(self.speed.get())} px/s')
 
+    def on_wheel_speed_change(self, _value=None):
+        self.wheel_speed_text.set(f'{int(self.wheel_speed.get())} 段/秒')
+
     def close(self):
         self.closed = True
         self.root.destroy()
@@ -113,6 +123,9 @@ class JoyConMouseApp:
         if self.closed:
             return
         try:
+            now = time.monotonic()
+            dt = max(0.0, min(now - self.last_tick_time, 0.03))
+            self.last_tick_time = now
             pygame.event.pump()
             # Cache SDL joystick objects; recreating them on every 8 ms tick is wasteful.
             signature = tuple((i, pygame.joystick.Joystick(i).get_name()) for i in range(pygame.joystick.get_count()))
@@ -146,48 +159,50 @@ class JoyConMouseApp:
             vx = max(-1.0, min(1.0, sum(v[0] for v in vectors)))
             vy = max(-1.0, min(1.0, sum(v[1] for v in vectors)))
             speed = float(self.speed.get())
-            dt = POLL_MS / 1000.0
             dx, dy = round(vx * speed * dt), round(vy * speed * dt)
             if dx or dy:
                 pyautogui.moveRel(dx, dy, duration=0)
 
             clicks: set[str] = set()
-            scrolls: set[str] = set()
+            wheel_input = 0.0
             if mode == 'R' and rights:
                 r = rights[0]
                 if pressed(r, 'A') or pressed(r, 'ZR'): clicks.add('left')
                 if pressed(r, 'Y') or pressed(r, 'R'): clicks.add('right')
-                if pressed(r, 'X'): scrolls.add('up')
-                if pressed(r, 'B'): scrolls.add('down')
+                if pressed(r, 'X'): wheel_input = -1.0
+                if pressed(r, 'B'): wheel_input = 1.0
             elif mode == 'L' and lefts:
                 l = lefts[0]
                 if pressed(l, 'LEFT') or pressed(l, 'ZL'): clicks.add('left')
                 if pressed(l, 'RIGHT') or pressed(l, 'L'): clicks.add('right')
-                if pressed(l, 'UP'): scrolls.add('up')
-                if pressed(l, 'DOWN'): scrolls.add('down')
+                if pressed(l, 'UP'): wheel_input = -1.0
+                if pressed(l, 'DOWN'): wheel_input = 1.0
             elif mode == 'LR':
                 if lefts and rights:
                     l, r = lefts[0], rights[0]
                     if pressed(l, 'L') or pressed(l, 'ZL') or pressed(r, 'A') or pressed(l, 'LEFT'): clicks.add('left')
                     if pressed(r, 'R') or pressed(r, 'ZR') or pressed(r, 'Y') or pressed(l, 'RIGHT'): clicks.add('right')
-                    wheel_value = axis(r, 1)
+                    wheel_input = axis(r, 1)
                 elif combined:
                     j = combined[0]
                     # Combined SDL device convention: left stick axes 0/1, right stick 2/3.
                     if pressed(j, 'L') or pressed(j, 'ZL') or pressed(j, 'A') or pressed(j, 'LEFT'): clicks.add('left')
                     if pressed(j, 'R') or pressed(j, 'ZR') or pressed(j, 'Y') or pressed(j, 'RIGHT'): clicks.add('right')
-                    wheel_value = axis(j, 3)
+                    wheel_input = axis(j, 3)
                 else:
-                    wheel_value = 0.0
-                now = time.monotonic()
-                if abs(wheel_value) > 0 and now - self.last_wheel_time >= WHEEL_INTERVAL:
-                    pyautogui.scroll(-1 if wheel_value > 0 else 1)
-                    self.last_wheel_time = now
+                    wheel_input = 0.0
 
             click_edges(clicks, self.previous_clicks)
-            scroll_edges(scrolls, self.previous_scrolls)
+            # Accumulate fractional wheel steps for smooth, deflection-sensitive scrolling.
+            # Wheel speed is independent of cursor speed.
+            self.wheel_accumulator += wheel_input * float(self.wheel_speed.get()) * dt
+            while self.wheel_accumulator >= 1.0:
+                pyautogui.scroll(-1)
+                self.wheel_accumulator -= 1.0
+            while self.wheel_accumulator <= -1.0:
+                pyautogui.scroll(1)
+                self.wheel_accumulator += 1.0
             self.previous_clicks = clicks
-            self.previous_scrolls = scrolls
 
             now = time.monotonic()
             if DEBUG_INPUT:
@@ -221,7 +236,7 @@ def main() -> None:
     pygame.joystick.init()
     root = tk.Tk()
     app = JoyConMouseApp(root)
-    print('Joy-Con Mouse started. GUI slider adjusts cursor speed; gyro is not used.')
+    print('Joy-Con Mouse started. GUI sliders adjust cursor and wheel speed; gyro is not used.')
     print('Debug input logging is off by default to keep the app responsive.')
     app.tick()
     try:
