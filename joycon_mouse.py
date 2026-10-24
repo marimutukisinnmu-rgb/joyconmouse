@@ -3,6 +3,11 @@ from __future__ import annotations
 import time
 import tkinter as tk
 from tkinter import ttk
+import os
+# Avoid SDL HIDAPI's Switch calibration handshake failure on some Windows Bluetooth setups.
+# Fall back to the Windows joystick backend for Joy-Con input.
+os.environ.setdefault('SDL_JOYSTICK_HIDAPI_JOY_CONS', '0')
+os.environ.setdefault('SDL_JOYSTICK_HIDAPI_SWITCH', '0')
 import pygame
 import pyautogui
 
@@ -236,6 +241,7 @@ def main() -> None:
     root = tk.Tk()
     app = JoyConMouseApp(root)
     print('Joy-Con Mouse started. GUI sliders adjust cursor and wheel speed; gyro is not used.')
+    print('SDL HIDAPI Switch drivers disabled to avoid stick calibration initialization errors.')
     print('Debug input logging is off by default to keep the app responsive.')
     app.tick()
     try:
