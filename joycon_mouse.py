@@ -11,7 +11,7 @@ DEFAULT_SPEED = 600.0
 MIN_SPEED = 100
 MAX_SPEED = 2000
 POLL_MS = 8
-DEFAULT_WHEEL_SPEED = 12.0
+DEFAULT_WHEEL_SPEED = 120.0
 MIN_WHEEL_SPEED = 1
 MAX_WHEEL_SPEED = 500
 DEBUG_INPUT = False
@@ -71,7 +71,7 @@ class JoyConMouseApp:
         self.status = tk.StringVar(value='Joy-Conを検索中…')
         self.speed_text = tk.StringVar(value=f'{int(DEFAULT_SPEED)} px/s')
         self.wheel_speed = tk.DoubleVar(value=DEFAULT_WHEEL_SPEED)
-        self.wheel_speed_text = tk.StringVar(value=f'{int(DEFAULT_WHEEL_SPEED)} 段/秒')
+        self.wheel_speed_text = tk.StringVar(value=f'{int(DEFAULT_WHEEL_SPEED)}段/秒')
         self.wheel_accumulator = 0.0
         self.last_tick_time = time.monotonic()
         self.previous_clicks: set[str] = set()
@@ -113,7 +113,7 @@ class JoyConMouseApp:
         self.speed_text.set(f'{int(self.speed.get())} px/s')
 
     def on_wheel_speed_change(self, _value=None):
-        self.wheel_speed_text.set(f'{int(self.wheel_speed.get())} 段/秒')
+        self.wheel_speed_text.set(f'{int(self.wheel_speed.get())}段/秒')
 
     def close(self):
         self.closed = True
@@ -196,12 +196,11 @@ class JoyConMouseApp:
             # Accumulate fractional wheel steps for smooth, deflection-sensitive scrolling.
             # Wheel speed is independent of cursor speed.
             self.wheel_accumulator += wheel_input * float(self.wheel_speed.get()) * dt
-            while self.wheel_accumulator >= 1.0:
-                pyautogui.scroll(-1)
-                self.wheel_accumulator -= 1.0
-            while self.wheel_accumulator <= -1.0:
-                pyautogui.scroll(1)
-                self.wheel_accumulator += 1.0
+            # Batch accumulated wheel steps into one OS event to reduce overhead.
+            wheel_steps = int(self.wheel_accumulator)
+            if wheel_steps:
+                pyautogui.scroll(-wheel_steps)
+                self.wheel_accumulator -= wheel_steps
             self.previous_clicks = clicks
 
             now = time.monotonic()
