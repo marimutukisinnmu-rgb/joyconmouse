@@ -12,7 +12,7 @@ MIN_SPEED = 100
 MAX_SPEED = 2000
 POLL_MS = 8
 WHEEL_INTERVAL = 0.12
-DEBUG_INPUT = True
+DEBUG_INPUT = False
 BUTTONS = {'A': 0, 'B': 1, 'X': 2, 'Y': 3, 'R': 6, 'ZR': 7, 'L': 6, 'ZL': 7}
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0
@@ -81,6 +81,9 @@ class JoyConMouseApp:
         self.last_debug = 0.0
         self.last_wheel_time = 0.0
         self.closed = False
+        self.devices = []
+        self.device_signature = None
+        self.mode_label = None
 
         frame = ttk.Frame(root, padding=18)
         frame.pack(fill='both', expand=True)
@@ -111,12 +114,18 @@ class JoyConMouseApp:
             return
         try:
             pygame.event.pump()
-            devices = []
-            for i in range(pygame.joystick.get_count()):
-                joy = pygame.joystick.Joystick(i)
-                if not joy.get_init():
-                    joy.init()
-                devices.append((i, joy, classify(joy.get_name())))
+            # Cache SDL joystick objects; recreating them on every 8 ms tick is wasteful.
+            signature = tuple((i, pygame.joystick.Joystick(i).get_name()) for i in range(pygame.joystick.get_count()))
+            if signature != self.device_signature:
+                self.devices = []
+                for i, name in signature:
+                    joy = pygame.joystick.Joystick(i)
+                    if not joy.get_init():
+                        joy.init()
+                    self.devices.append((i, joy, classify(name)))
+                self.device_signature = signature
+                self.last_raw.clear()
+            devices = self.devices
 
             lefts = [j for _, j, side in devices if side == 'L']
             rights = [j for _, j, side in devices if side == 'R']
@@ -192,7 +201,10 @@ class JoyConMouseApp:
                     names = [f'#{i} {j.get_name()!r} side={side or "unrecognized"}' for i, j, side in devices]
                     print(f'Mode={mode} | SDL devices={names or "none detected"}')
                     self.last_debug = now
-            self.status.set(f'Mode: {mode} | 検出デバイス: {len(devices)}台')
+            status_text = f'Mode: {mode} | 検出デバイス: {len(devices)}台'
+            if status_text != self.mode_label:
+                self.status.set(status_text)
+                self.mode_label = status_text
         except pyautogui.FailSafeException:
             self.status.set('安全停止しました。再起動するには一度終了して起動し直してください。')
             print('PyAutoGUI failsafe triggered; closing app loop.')
@@ -210,7 +222,7 @@ def main() -> None:
     root = tk.Tk()
     app = JoyConMouseApp(root)
     print('Joy-Con Mouse started. GUI slider adjusts cursor speed; gyro is not used.')
-    print('Move the sticks/buttons to print raw input changes in this console.')
+    print('Debug input logging is off by default to keep the app responsive.')
     app.tick()
     try:
         root.mainloop()
